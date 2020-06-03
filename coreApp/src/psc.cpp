@@ -196,6 +196,11 @@ void PSC::start_reconnect()
 
     connected = false;
     timer_active = true;
+
+    for(block_map::iterator it=recv_blocks.begin(), end=recv_blocks.end(); it!=end; ++it)
+    {
+        scanIoRequest(it->second->scan);
+    }
 }
 
 /* entry point for re-connect timer */
