@@ -62,7 +62,7 @@ long read_si(stringinRecord* prec)
         Guard(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 
@@ -95,7 +95,7 @@ long write_so(stringoutRecord* prec)
         Guard(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            recGblSetSevr(prec, WRITE_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, WRITE_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 

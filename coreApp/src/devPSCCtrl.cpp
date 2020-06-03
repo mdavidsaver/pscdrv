@@ -189,7 +189,7 @@ long write_bo_send_changed(boRecord* prec)
         Guard g(psc->lock);
 
         if(!psc->isConnected())
-            recGblSetSevr(prec, WRITE_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, WRITE_ALARM, INVALID_ALARM, "No Conn");
         else
             psc->flushSend();
 
@@ -206,7 +206,7 @@ long write_lo_send_block(longoutRecord* prec)
         Guard g(psc->lock);
 
         if(prec->val < 0 || prec->val > 0xffff) {
-            recGblSetSevr(prec, WRITE_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, WRITE_ALARM, INVALID_ALARM, "VAL Out of range");
         } else {
             psc->send(prec->val);
         }
