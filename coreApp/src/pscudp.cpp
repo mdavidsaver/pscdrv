@@ -198,8 +198,10 @@ void PSCUDP::recvdata(short evt)
             }
             bodyblock.count++;
 
-            bodyblock.data.resize(bodylen);
-            memcpy(&bodyblock.data[0], hbuf+8, bodylen);
+            epics::pvData::shared_vector<char> temp(bodylen);
+
+            memcpy(&temp[0], hbuf+8, bodylen);
+            bodyblock.data = epics::pvData::freeze(temp);
 
             scanIoRequest(bodyblock.scan);
             bodyblock.listeners(&bodyblock);

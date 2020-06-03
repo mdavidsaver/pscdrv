@@ -123,7 +123,7 @@ long read_wf_bytes(waveformRecord* prec)
         }
 
         char *pto = (char*)prec->bptr;
-        char *pfrom = &priv->block->data[0];
+        const char *pfrom = &priv->block->data[0];
 
         size_t len = priv->block->data.size();
         if(len>=prec->nelm)

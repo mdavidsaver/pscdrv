@@ -154,7 +154,8 @@ void setPSCSendBlockSize(const char* name, int bid, int size)
         Block *block = psc->getSend(bid);
         if(!block)
             throw std::runtime_error("Can't select PSC Block");
-        block->data.resize(size, 0);
+        epics::pvData::shared_vector<char> temp(size, 0);
+        block->data = epics::pvData::freeze(temp);
         timefprintf(stderr, "Set PSC '%s' send block %d size to %lu bytes\n",
                 name, bid, (unsigned long)block->data.size());
     }catch(std::exception& e){

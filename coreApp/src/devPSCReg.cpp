@@ -211,10 +211,17 @@ void write_from_field(dbCommon *prec, Priv *priv, const T* pfield)
         junk += 1;
     }
 
-    T *pdata = (T*)&priv->block->data[priv->offset];
+    epics::pvData::shared_vector<char> scratch(epics::pvData::thaw(priv->block->data));
+    try {
+        T *pdata = (T*)&scratch[priv->offset];
 
-    *pdata = hton(*pfield);
-    return;
+        *pdata = hton(*pfield);
+
+        priv->block->data = epics::pvData::freeze(scratch);
+    }catch(...){
+        priv->block->data = epics::pvData::freeze(scratch);
+        throw;
+    }
 }
 
 // used for bo, mbbo, and mbboDirect

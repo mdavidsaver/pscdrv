@@ -103,9 +103,11 @@ long write_so(stringoutRecord* prec)
 
         priv->psc->queueSend(priv->block, (void*)&prec->val[0], len);
 
-        priv->block->data.resize(len);
+        epics::pvData::shared_vector<char> temp(len);
 
-        memcpy(&priv->block->data[0], prec->val, len);
+        memcpy(&temp[0], prec->val, len);
+
+        priv->block->data = epics::pvData::freeze(temp);
     }CATCH(write_so, prec)
 
     return 0;

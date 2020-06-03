@@ -64,10 +64,7 @@ void received_block(void* raw, Block* block)
 
     bool alreadyQueued = !priv->syncData.empty();
 
-    priv->syncData.resize(block->data.size());
-    std::copy(priv->block->data.begin(),
-              priv->block->data.end(),
-              priv->syncData.begin());
+    priv->syncData = priv->block->data;
 
     if(!alreadyQueued)
         callbackRequest(&priv->syncCB);

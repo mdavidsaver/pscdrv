@@ -27,6 +27,8 @@
 #include <event2/bufferevent.h>
 #include <event2/buffer.h>
 
+#include <pv/sharedVector.h>
+
 #include "cblist.h"
 
 #if __cplusplus<201103L
@@ -78,7 +80,7 @@ struct Block
     PSCBase& psc;
     const epicsUInt16 code;
 
-    typedef std::vector<char> data_t;
+    typedef epics::pvData::shared_vector<const char> data_t;
     data_t data;
 
     bool queued;
