@@ -41,6 +41,11 @@ device(svectorin, INST_IO, devPSCBlockInSVI32,  "PSC Block I32 In")
 device(svectorin, INST_IO, devPSCBlockInSVIF32,  "PSC Block F32 In")
 device(svectorin, INST_IO, devPSCBlockInSVIF64,  "PSC Block F64 In")
 
+device(pvstructin, INST_IO, devPSCBlockInPVI16,  "PSC Block I16 In")
+device(pvstructin, INST_IO, devPSCBlockInPVI32,  "PSC Block I32 In")
+device(pvstructin, INST_IO, devPSCBlockInPVIF32,  "PSC Block F32 In")
+device(pvstructin, INST_IO, devPSCBlockInPVIF64,  "PSC Block F64 In")
+
 #  Link: "@pscname block# tx|rx"
 device(longin, INST_IO, devPSCBlockCountLi, "PSC Block Msg Count")
 
