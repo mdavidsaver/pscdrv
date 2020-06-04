@@ -21,6 +21,7 @@ pscCore_SRCS += devPSCWf.cpp
 pscCore_SRCS += devPSCReg.cpp
 pscCore_SRCS += devPSCSingle.cpp
 pscCore_SRCS += devPSCCtrl.cpp
+pscCore_SRCS += devPSCSV.cpp
 
 pscCore_SYS_LIBS += event_core event_extra
 pscCore_SYS_LIBS_Linux += event_pthreads
