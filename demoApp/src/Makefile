@@ -14,9 +14,9 @@ DBD += pscdemo.dbd
 
 # demo.dbd will be made up from these files:
 pscdemo_DBD += base.dbd
+pscdemo_DBD += qsrv.dbd
 pscdemo_DBD += pscCore.dbd
 pscdemo_DBD += PVAServerRegister.dbd
-pscdemo_DBD += qsrv.dbd
 
 pscdemo_LIBS += pscCore
 pscdemo_LIBS += qsrv
