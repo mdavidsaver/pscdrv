@@ -105,7 +105,7 @@ long read_pvi(pvstructinRecord* prec)
         // TODO: in record support somehow?
         assign<pvd::PVScalar>(prec, "timeStamp.secondsPastEpoch")->putFrom(prec->time.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH);
         assign<pvd::PVScalar>(prec, "timeStamp.nanoseconds")->putFrom(prec->time.nsec);
-        assign<pvd::PVScalar>(prec, "timeStamp.userTag")->putFrom(prec->utag);
+        assign<pvd::PVScalar>(prec, "timeStamp.userTag")->putFrom<pvd::uint64>(prec->utag);
 
         assign<pvd::PVScalar>(prec, "alarm.severity")->putFrom(prec->nsev);
         assign<pvd::PVScalar>(prec, "alarm.status")->putFrom(prec->nsta);
