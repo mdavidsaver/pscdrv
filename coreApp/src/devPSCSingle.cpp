@@ -21,6 +21,8 @@
 
 #include <menuConvert.h>
 
+#include "utilpvt.h"
+
 namespace {
 
 template<typename R> struct extra_init {static void op(R* prec){}};
@@ -62,10 +64,7 @@ void received_block(void* raw, Block* block)
 
     bool alreadyQueued = !priv->syncData.empty();
 
-    priv->syncData.resize(block->data.size());
-    std::copy(priv->block->data.begin(),
-              priv->block->data.end(),
-              priv->syncData.begin());
+    priv->syncData = priv->block->data;
 
     if(!alreadyQueued)
         callbackRequest(&priv->syncCB);
@@ -90,7 +89,7 @@ long init_output(R* prec)
     assert(prec->out.type==INST_IO);
     extra_init<R>::op(prec);
     try {
-        std::auto_ptr<SinglePriv> priv(new SinglePriv(prec));
+        psc::auto_ptr<SinglePriv> priv(new SinglePriv(prec));
 
         RecInfo info((dbCommon*)prec);
 

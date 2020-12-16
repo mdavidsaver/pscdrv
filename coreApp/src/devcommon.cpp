@@ -55,6 +55,16 @@ void parse_link(Priv* priv, const char* link, int direction)
             else
                 priv->timeFromBlock = true;
         }
+
+        const char *tagoffset = info.get("TagFromBlock");
+        if(tagoffset) {
+            std::istringstream tsstrm(tagoffset);
+            tsstrm >> priv->tagoffset;
+            if(tsstrm.fail())
+                timefprintf(stderr, "%s: Error processing time offset '%s'\n", priv->prec->name, tagoffset);
+            else
+                priv->tagFromBlock = true;
+        }
     }
 
     Guard(priv->psc->lock);
@@ -70,7 +80,6 @@ void parse_link(Priv* priv, const char* link, int direction)
                 priv->prec->name, block, name.c_str());
         throw std::runtime_error("PSC can't get block #");
     }
-    return;
 }
 
 namespace {
@@ -122,6 +131,15 @@ void setRecTimestamp(Priv *priv)
     }
 
     priv->prec->time = result;
+
+    if(priv->tagFromBlock &&
+            priv->block &&
+            priv->block->data.size() >= (priv->tagoffset+4))
+    {
+        epicsUInt32 raw = *(epicsUInt32*)&priv->block->data[priv->tagoffset];
+
+        priv->prec->utag = ntohl(raw);
+    }
 }
 
 RecInfo::RecInfo(const char *recname)

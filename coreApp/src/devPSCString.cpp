@@ -10,13 +10,15 @@
 #include <stringinRecord.h>
 #include <stringoutRecord.h>
 
+#include "utilpvt.h"
+
 namespace {
 
 long init_si_record(stringinRecord* prec)
 {
     assert(prec->inp.type==INST_IO);
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->inp.value.instio.string, 0);
 
@@ -30,7 +32,7 @@ long init_so_record(stringoutRecord* prec)
 {
     assert(prec->out.type==INST_IO);
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->out.value.instio.string, 1);
 
@@ -60,7 +62,7 @@ long read_si(stringinRecord* prec)
         Guard(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 
@@ -93,7 +95,7 @@ long write_so(stringoutRecord* prec)
         Guard(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            recGblSetSevr(prec, WRITE_ALARM, INVALID_ALARM);
+            recGblSetSevrMsg(prec, WRITE_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 
@@ -101,9 +103,11 @@ long write_so(stringoutRecord* prec)
 
         priv->psc->queueSend(priv->block, (void*)&prec->val[0], len);
 
-        priv->block->data.resize(len);
+        epics::pvData::shared_vector<char> temp(len);
 
-        memcpy(&priv->block->data[0], prec->val, len);
+        memcpy(&temp[0], prec->val, len);
+
+        priv->block->data = epics::pvData::freeze(temp);
     }CATCH(write_so, prec)
 
     return 0;

@@ -24,6 +24,8 @@
 
 #include <menuConvert.h>
 
+#include "utilpvt.h"
+
 namespace {
 
 template<typename R> struct extra_init {static void op(R* prec){}};
@@ -46,7 +48,7 @@ long init_input(R* prec)
     assert(prec->inp.type==INST_IO);
     extra_init<R>::op(prec);
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->inp.value.instio.string, 0);
 
@@ -62,7 +64,7 @@ long init_rb(R* prec)
     assert(prec->inp.type==INST_IO);
     extra_init<R>::op(prec);
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->inp.value.instio.string, 1);
 
@@ -78,7 +80,7 @@ long init_output(R* prec)
     assert(prec->out.type==INST_IO);
     extra_init<R>::op(prec);
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->out.value.instio.string, 1);
 
@@ -110,7 +112,7 @@ void read_to_field(dbCommon *prec, Priv *priv, T* pfield)
     }
 
     if(!priv->psc->isConnected()) {
-        int junk = recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+        int junk = recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
         junk += 1;
     }
 
@@ -205,14 +207,21 @@ void write_from_field(dbCommon *prec, Priv *priv, const T* pfield)
     }
 
     if(!priv->psc->isConnected()) {
-        int junk = recGblSetSevr(prec, WRITE_ALARM, INVALID_ALARM);
+        int junk = recGblSetSevrMsg(prec, WRITE_ALARM, INVALID_ALARM, "No Conn");
         junk += 1;
     }
 
-    T *pdata = (T*)&priv->block->data[priv->offset];
+    epics::pvData::shared_vector<char> scratch(epics::pvData::thaw(priv->block->data));
+    try {
+        T *pdata = (T*)&scratch[priv->offset];
 
-    *pdata = hton(*pfield);
-    return;
+        *pdata = hton(*pfield);
+
+        priv->block->data = epics::pvData::freeze(scratch);
+    }catch(...){
+        priv->block->data = epics::pvData::freeze(scratch);
+        throw;
+    }
 }
 
 // used for bo, mbbo, and mbboDirect

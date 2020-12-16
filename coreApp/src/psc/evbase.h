@@ -8,10 +8,10 @@
 #ifndef EVBASE_H
 #define EVBASE_H
 
-#include <tr1/memory>
-
 #include <epicsThread.h>
 #include <epicsMutex.h>
+
+#include <pv/sharedPtr.h>
 
 #include "util.h"
 

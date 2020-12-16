@@ -196,6 +196,11 @@ void PSC::start_reconnect()
 
     connected = false;
     timer_active = true;
+
+    for(block_map::iterator it=recv_blocks.begin(), end=recv_blocks.end(); it!=end; ++it)
+    {
+        scanIoRequest(it->second->scan);
+    }
 }
 
 /* entry point for re-connect timer */
@@ -330,12 +335,13 @@ void PSC::recvdata()
                 if(PSCDebug>2)
                     timefprintf(stderr, "%s: Process message %u\n", name.c_str(), header);
 
-                bodyblock->data.reserve(bodylen);
-                bodyblock->data.resize(bodylen);
+                epics::pvData::shared_vector<char> temp(bodylen);
 
-                evbuffer_remove(buf, &bodyblock->data[0], bodylen);
+                evbuffer_remove(buf, &temp[0], bodylen);
                 scanIoRequest(bodyblock->scan);
                 bodyblock->listeners(bodyblock);
+
+                bodyblock->data = epics::pvData::freeze(temp);
 
             } else {
                 /* ignore valid, but uninteresting message body */

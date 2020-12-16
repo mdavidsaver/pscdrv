@@ -13,6 +13,8 @@
 #include <menuFtype.h>
 #include <waveformRecord.h>
 
+#include "utilpvt.h"
+
 namespace {
 
 template<int dir>
@@ -24,7 +26,7 @@ long init_wf_record(waveformRecord* prec)
         return 0;
     }
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->inp.value.instio.string, dir);
 
@@ -43,7 +45,7 @@ long init_wf_record_bytes(waveformRecord* prec)
         return 0;
     }
     try {
-        std::auto_ptr<Priv> priv(new Priv(prec));
+        psc::auto_ptr<Priv> priv(new Priv(prec));
 
         parse_link(priv.get(), prec->inp.value.instio.string, dir);
 
@@ -74,7 +76,7 @@ long read_wf(waveformRecord* prec)
         Guard g(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            int junk = recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            int junk = recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             junk += 1;
             return 0;
         }
@@ -115,13 +117,13 @@ long read_wf_bytes(waveformRecord* prec)
         Guard g(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            int junk = recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            int junk = recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             junk += 1;
             return 0;
         }
 
         char *pto = (char*)prec->bptr;
-        char *pfrom = &priv->block->data[0];
+        const char *pfrom = &priv->block->data[0];
 
         size_t len = priv->block->data.size();
         if(len>=prec->nelm)
@@ -159,7 +161,7 @@ long write_wf(waveformRecord* prec)
         Guard g(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            (void)recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            (void)recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 
@@ -178,7 +180,7 @@ long write_wf_bytes(waveformRecord* prec)
         Guard g(priv->psc->lock);
 
         if(!priv->psc->isConnected()) {
-            (void)recGblSetSevr(prec, READ_ALARM, INVALID_ALARM);
+            (void)recGblSetSevrMsg(prec, READ_ALARM, INVALID_ALARM, "No Conn");
             return 0;
         }
 
