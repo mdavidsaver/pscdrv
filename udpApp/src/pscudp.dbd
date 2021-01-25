@@ -1,0 +1,2 @@
+registrar(pscudp)
+variable(PSCUDPDebug, int)
