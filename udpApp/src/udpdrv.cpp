@@ -1,10 +1,18 @@
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include <string.h>
+#include <limits.h>
 
 #include <osiSock.h>
+#include <osiUnistd.h>
 #include <errlog.h>
 #include <epicsStdio.h>
 #include <epicsAtomic.h>
+#include <epicsTime.h>
+#include <drvSup.h>
 #include <iocsh.h>
 
 #include <psc/device.h>
@@ -17,8 +25,38 @@
 
 namespace {
 
-int PSCUDPDebug;
-int PSCUDPBatchSize = 16;
+// max size to allocate for a single buffer (Bytes)
+int PSCUDPMaxPacketSize = 1024;
+// max RX packet rate (pkt/sec)
+double PSCUDPMaxPacketRate = 280000.0;
+// max time between disk flush (sec)
+double PSCUDPMaxFlushPeriod = 1.0;
+// max data file size before rotation (MB)
+double PSCUDPMaxLenMB = 2000;
+
+// OS limit on maximum number of iovec passed to writev
+#ifndef IOV_MAX
+// conservative default for antique Linux (see NOTES for man writev)
+#  define IOV_MAX (16)
+#endif
+size_t iovLimit = IOV_MAX;
+
+struct DataFD {
+    int fd;
+
+    DataFD() :fd(-1) {}
+    ~DataFD() { close(); }
+    void close() {
+        if(fd>=0)
+            ::close(fd);
+        fd = -1;
+    }
+    bool isOpen() const { return fd>=0; }
+
+private:
+    DataFD(const DataFD&);
+    DataFD& operator=(const DataFD&);
+};
 
 struct UDPFast : public PSCBase
 {
@@ -26,24 +64,33 @@ struct UDPFast : public PSCBase
     osiSockAddr self, peer;
 
     int running;
+    size_t batchSize;
 
     typedef std::vector<std::vector<char> > vecs_t;
     // vector data free-list
     // entries originating with this free-list may appear in:
-    //  vpool
-    //  pending
-    //  inprog - local to rxfn()
+    //   vpool
+    //   pending
+    //   inprog - local to rxfn()
+    // guarded by rxLock
     vecs_t vpool;
 
     struct pkt {
         std::vector<char> body;
+        size_t bodylen;
         epicsTimeStamp rxtime;
         epicsUInt16 msgid;
     };
 
+    // guarded by rxLock
     typedef std::vector<pkt> pkts_t;
     pkts_t pending;
+
+    epicsEvent vpoolStall;
     epicsEvent pendingReady; // set from rxWorker to wake cacheWorker
+
+    std::string filebase;
+    bool reopen;
 
     // rx worker pulls from socket buffer and pushes to 'pending'
     struct RXWorker : public epicsThreadRunable
@@ -54,7 +101,7 @@ struct UDPFast : public PSCBase
         virtual void run() override final { self->rxfn(); }
     } rxjob;
     epicsThread rxworker;
-    epicsMutex rxLock;
+    mutable epicsMutex rxLock;
 
     // cache worker pulls from 'pending' and pushes to Block cache
     struct CacheWorker : public epicsThreadRunable
@@ -65,7 +112,6 @@ struct UDPFast : public PSCBase
         virtual void run() override final { self->cachefn(); }
     } cachejob;
     epicsThread cacheworker;
-    epicsMutex cacheLock;
 
     UDPFast(const std::string& name,
             const std::string& host,
@@ -74,6 +120,8 @@ struct UDPFast : public PSCBase
         :PSCBase (name, host, port)
         ,sock(epicsSocketCreate(AF_INET, SOCK_DGRAM, 0))
         ,running(1)
+        ,filebase("./testdata-")
+        ,reopen(true)
         ,rxjob(this)
         ,rxworker(rxjob, "udpfrx", epicsThreadGetStackSize(epicsThreadStackBig), epicsThreadPriorityHigh+1)
         ,cachejob(this)
@@ -81,13 +129,6 @@ struct UDPFast : public PSCBase
     {
         if(sock==INVALID_SOCKET)
             throw std::bad_alloc();
-
-        // pre-allocate buffers
-        vpool.resize(3*271000);
-        for(size_t i=0; i<vpool.size(); i++)
-            vpool.resize(1024);
-
-        pending.reserve(vpool.size());
 
         {
             timeval timeout = {1, 0};
@@ -106,15 +147,31 @@ struct UDPFast : public PSCBase
         }
         // TODO: set SO_RCVBUF, SO_INCOMING_CPU, SO_BUSY_POLL ?
 
+        unsigned rxbuflen = 0; // in bytes
         {
-            unsigned value = 0;
-            osiSocklen_t len = sizeof(value);
-            if(getsockopt(sock, SOL_SOCKET, SO_RCVBUF, &value, &len)) {
+            osiSocklen_t len = sizeof(rxbuflen);
+            if(getsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rxbuflen, &len)) {
                 fprintf(stderr, "Unable to get SO_RCVBUF");
             } else {
-                printf("  SO_RCVBUF = %u\n", value);
+                printf("  SO_RCVBUF = %u\n", rxbuflen);
             }
         }
+
+        const unsigned maxpktlen = std::max(8, PSCUDPMaxPacketSize);
+
+        // recvmmsg() can only deque as many as can fit it the socket buffer
+        // Not considering that Linux _may_ apply a 2x multiplier
+        batchSize = std::min(std::max<size_t>(1u, rxbuflen/maxpktlen), iovLimit);
+        printf("  batch size %zu\n", batchSize);
+
+        // pre-allocate buffers to handle 2 periods of data.
+        // one accumulating, and another flushing
+        vpool.resize(size_t(std::max(1.0, 2*PSCUDPMaxPacketRate*PSCUDPMaxFlushPeriod)));
+        for(size_t i=0; i<vpool.size(); i++)
+            vpool[i].resize(maxpktlen);
+        printf("  vpool cnt=%zu size=%u b\n", vpool.size(), maxpktlen);
+
+        pending.reserve(vpool.size());
 
         if(aToIPAddr(host.c_str(), port, &peer.ia))
             throw std::runtime_error("Bad host/IP");
@@ -163,7 +220,7 @@ struct UDPFast : public PSCBase
             };
         };
 
-        std::vector<mmsghdr> headers(std::max(1, PSCUDPBatchSize));
+        std::vector<mmsghdr> headers(batchSize);
         std::vector<message> msgs(headers.size());
         bool notifycache = false;
 
@@ -172,22 +229,32 @@ struct UDPFast : public PSCBase
         // loop to receive batches of packets
         while(epics::atomic::get(running)) { // main rx loop
 
+            if(vpool.empty()) {
+                if(PSCDebug>=1)
+                    errlogPrintf("%s : vpool stall\n", name.c_str());
+
+                UnGuard U(G);
+                vpoolStall.wait();
+                continue;
+            }
+
             // assign buffers
             size_t nassign = msgs.size();
             for(size_t i=0; i<nassign; i++) {
                 msghdr& hdr = headers[i].msg_hdr;
                 message& msg = msgs[i];
 
-                if(vpool.empty()) {
+                if(!msg.buf.empty()) {
+                    // re-use leftovers
+
+                } else if(vpool.empty()) {
                     nassign = i;
-                    if(PSCDebug>=1)
-                        errlogPrintf("%s : oom for recvmmsg %zu\n", name.c_str(), nassign);
                     break;
 
                 } else {
                     msg.buf.swap(vpool.back());
                     vpool.pop_back();
-                    msg.buf.resize(1024u); // shouldn't need to (re)allocate
+                    assert(msg.buf.size()>=8);
 
                     msg.io[1].iov_base = &msg.buf[0];
                     msg.io[1].iov_len = msg.buf.size();
@@ -206,11 +273,9 @@ struct UDPFast : public PSCBase
                 msg.io[0].iov_base = msg.hbuf;
                 msg.io[0].iov_len = sizeof(msg.hbuf);
             }
-            // from this point we must pass through to de-assign loop below
 
             if(nassign < msgs.size()) {
-                int lvl = nassign==0 ? 1 : 2;
-                if(PSCDebug>=lvl)
+                if(PSCDebug>=2)
                     errlogPrintf("%s : insufficient buffers for for recvmmsg %zu < %zu\n",
                                  name.c_str(), nassign, msgs.size());
 
@@ -325,17 +390,7 @@ struct UDPFast : public PSCBase
                 pending.back().msgid = msgid;
                 pending.back().rxtime = rxtime;
                 pending.back().body.swap(msg.buf);
-            }
-
-            // de-assign unused buffers
-            for(size_t i=0; i<msgs.size(); i++) {
-                message& msg = msgs[i];
-                if(!msg.buf.empty()) {
-                    vpool.push_back(vecs_t::value_type()); // shouldn't need to (re)allocate
-                    vpool.back().swap(msg.buf);
-                    if(PSCDebug>=5)
-                        errlogPrintf("%s : reclaim unused %zu\n", name.c_str(), i);
-                }
+                pending.back().bodylen = blen;
             }
         } // main rx
 
@@ -348,17 +403,39 @@ struct UDPFast : public PSCBase
         if(PSCDebug>=2)
             errlogPrintf("%s : cache worker starts\n", name.c_str());
 
-        Guard G(lock);
+        DataFD datafile;
+
+        struct header_t {
+            const char P, S;
+            epicsUInt16 msgid;
+            epicsUInt32 bodylen;
+            epicsUInt32 sec;
+            epicsUInt32 nsec;
+            header_t() :P('P'), S('S') {}
+        };
+        std::vector<iovec> ios(iovLimit); // round down to multiple of 2
+        std::vector<header_t> headers(ios.size()/2u);
 
         pkts_t inprog;
+        {
+            Guard R(rxLock);
+            inprog.reserve(pending.capacity());
+            // our 'inprog' and 'pending' are swap()'d as two parts of a double buffering scheme
+        }
+
+        Guard G(lock);
 
         while(true) {
             {
                 UnGuard U(G);
 
                 // de-assign
+                bool unstall = false;
                 if(!inprog.empty()) {
                     Guard R(rxLock);
+
+                    unstall = vpool.empty();
+
                     for(size_t i=0, N=inprog.size(); i<N; i++) {
                         pkt& pkt = inprog[i];
 
@@ -370,6 +447,13 @@ struct UDPFast : public PSCBase
                         }
                     }
                     inprog.clear();
+
+                    unstall &= !vpool.empty();
+                }
+                if(unstall) {
+                    if(PSCDebug>=1)
+                        errlogPrintf("%s : vpool stall resume\n", name.c_str());
+                    vpoolStall.signal();
                 }
 
                 if(!epics::atomic::get(running))
@@ -385,7 +469,7 @@ struct UDPFast : public PSCBase
             }
 
             if(PSCDebug>=5)
-                errlogPrintf("%s : consuming %zu\n", name.c_str(), pending.size());
+                errlogPrintf("%s : consuming %zu\n", name.c_str(), inprog.size());
 
             for(size_t i=0, N=inprog.size(); i<N; i++) {
                 pkt& pkt = inprog[i];
@@ -405,6 +489,110 @@ struct UDPFast : public PSCBase
                     blk->listeners(blk);
                 }
             }
+
+            if(datafile.isOpen()) {
+                off_t pos = lseek(datafile.fd, 0, SEEK_CUR);
+                if(pos!=(off_t)-1 && pos>=off_t(PSCUDPMaxLenMB*(1u<<20u))) {
+                    reopen = true;
+                    if(PSCDebug>=2)
+                        errlogPrintf("%s : rotate data file for size=%zu\n", name.c_str(), size_t(pos));
+                }
+            }
+
+            if(reopen && !filebase.empty()) {
+                reopen = false;
+
+                epicsTimeStamp now;
+                std::string fname;
+
+                fname = filebase;
+
+                UnGuard U(G);
+
+                // hack: if this is a re-open after an error, ensure that the file name will be different
+                epicsThreadSleep(1.0);
+
+                epicsTimeGetCurrent(&now);
+                char tsbuf[25];
+                epicsTimeToStrftime(tsbuf, sizeof(tsbuf), "%Y%m%d-%H%M%S", &now);
+
+                fname += tsbuf;
+                fname += ".dat";
+
+                datafile.close();
+
+                datafile.fd = ::open(fname.c_str(), O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0644);
+                if(datafile.fd==-1) {
+                    errlogPrintf("%s : Error opening \"%s\" : (%d) %s\n",
+                                 name.c_str(), fname.c_str(), errno, strerror(errno));
+                } else {
+                    if(PSCDebug>=1)
+                        errlogPrintf("%s : opened \"%s\"\n", name.c_str(), fname.c_str());
+                }
+            }
+
+            if(!datafile.isOpen())
+                continue;
+
+            UnGuard U(G);
+
+            epicsUInt64 tstart = epicsMonotonicGet();
+            size_t datatotal = 0u;
+
+            // iterate inprog and write in batches
+            for(size_t i=0, N=inprog.size(); i<N && datafile.isOpen();) {
+                size_t batchtotal = 0u;
+                size_t b, B;
+
+                for(b=0, B=headers.size(); i<N && b<B; i++, b++) {
+                    auto& pkt = inprog[i];
+                    auto& H = headers[b];
+                    auto& IOhead = ios[2*b+0];
+                    auto& IObody = ios[2*b+1];
+
+                    H.msgid = htons(pkt.msgid);
+                    H.bodylen = htonl(pkt.bodylen);
+                    H.sec = htonl(pkt.rxtime.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH);
+                    H.nsec = htonl(pkt.rxtime.nsec);
+
+                    IOhead.iov_base = &H;
+                    IOhead.iov_len = sizeof(header_t);
+                    IObody.iov_base = &pkt.body[0];
+                    IObody.iov_len = pkt.bodylen;
+                    batchtotal += sizeof(header_t) + pkt.bodylen;
+                }
+
+                ssize_t ret = writev(datafile.fd, &ios[0], 2*b);
+                if(ret<0) {
+                    if(PSCDebug>=0)
+                        errlogPrintf("%s : data file write error: (%d) %s\n", name.c_str(), errno, strerror(errno));
+                    datafile.close();
+                    reopen = true;
+
+                } else if(size_t(ret)!=batchtotal) {
+                    if(PSCDebug>=0)
+                        errlogPrintf("%s : data file write incomplete %zd of %zu\n", name.c_str(), ret, batchtotal);
+                    datafile.close();
+                    reopen = true;
+                }
+
+                datatotal += batchtotal;
+            }
+
+            if(datafile.isOpen() && fdatasync(datafile.fd)) {
+                if(PSCDebug>=0)
+                    errlogPrintf("%s : fdatasync() error %d\n", name.c_str(), errno);
+            }
+
+            epicsUInt64 tend = epicsMonotonicGet();
+            if(PSCDebug>=3) {
+                double ellapsed = (tend-tstart)/1e9; // sec
+                double rate = datatotal/ellapsed; // B/s
+
+                errlogPrintf("%s : data file wrote %zu B in %g ms for %.3g GB/s\n",
+                             name.c_str(), datatotal, ellapsed*1e3, rate/double(1u<<30u));
+            }
+
         }
 
         if(PSCDebug>=2)
@@ -413,11 +601,13 @@ struct UDPFast : public PSCBase
 
     virtual void connect() override final
     {
+        connected = true;
         rxworker.start();
         cacheworker.start();
     }
     virtual void stop() override final
     {
+        connected = false;
         epics::atomic::set(running, 0);
         {
             // send a zero length packet to myself to wake rxworker
@@ -425,6 +615,7 @@ struct UDPFast : public PSCBase
             if(sendto(sock, &junk, 0, 0, &self.sa, sizeof(self))<0)
                 errlogPrintf("%s : error waking rxworker\n", name.c_str());
         }
+        vpoolStall.signal();
         pendingReady.signal(); // wake cacheworker
         rxworker.exitWait();
         cacheworker.exitWait();
@@ -464,11 +655,53 @@ void createPSCUDPFastArgsCallFunc(const iocshArgBuf *args)
 void pscudp()
 {
     iocshRegister(&createPSCUDPFastDef, &createPSCUDPFastArgsCallFunc);
+
+    auto lim = sysconf(_SC_IOV_MAX);
+    if(lim>0)
+        iovLimit = lim;
 }
+
+bool report1(int lvl, const PSCBase* base)
+{
+    auto drv = dynamic_cast<const UDPFast*>(base);
+    if(!drv)
+        return true;
+
+    printf("PSCUDP: %s\n", drv->name.c_str());
+
+    if(lvl<=0)
+        return true;
+
+    size_t vpoolCnt, pendingCnt;
+    if(lvl>0) {
+        Guard G(drv->rxLock);
+        vpoolCnt = drv->vpool.size();
+        pendingCnt = drv->pending.size();
+    }
+    printf("  vpool#=%zu pending#=%zu\n", vpoolCnt, pendingCnt);
+
+    return true;
+}
+
+long report(int lvl)
+{
+    PSCBase::visit(report1, lvl);
+    return 0;
+}
+
+drvet drvUDPFast = {
+    2,
+    (DRVSUPFUN)report,
+    0,
+};
 
 } // namespace
 
 extern "C" {
 epicsExportRegistrar(pscudp);
-epicsExportAddress(int, PSCUDPDebug);
+epicsExportAddress(drvet, drvUDPFast);
+epicsExportAddress(int, PSCUDPMaxPacketSize);
+epicsExportAddress(double, PSCUDPMaxPacketRate);
+epicsExportAddress(double, PSCUDPMaxFlushPeriod);
+epicsExportAddress(double, PSCUDPMaxLenMB);
 }

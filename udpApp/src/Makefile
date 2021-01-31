@@ -6,6 +6,7 @@ include $(TOP)/configure/CONFIG
 #=============================
 
 USR_CPPFLAGS += -I$(TOP)/coreApp/src
+USR_CPPFLAGS += -D_FILE_OFFSET_BITS=64
 
 DBD += pscudp.dbd
 

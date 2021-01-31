@@ -1,2 +1,6 @@
 registrar(pscudp)
-variable(PSCUDPDebug, int)
+driver(drvUDPFast)
+variable(PSCUDPMaxPacketSize, int)
+variable(PSCUDPMaxPacketRate, double)
+variable(PSCUDPMaxFlushPeriod, double)
+variable(PSCUDPMaxLenMB, double)
